@@ -1,7 +1,8 @@
-"""README.md からエンドユーザー向けの「使い方」PDF を生成する。
+"""MANUAL.md（利用者向けの使い方）を A4 の PDF に組版する。
 
-README を唯一の情報源とし、そこから利用者向けのセクションだけを抜き出して
-A4 縦の PDF に組版する。使い方を README と PDF の二重管理にしないための仕組み。
+MANUAL.md を唯一の情報源とし、その全体をそのまま PDF にする。使い方を
+Markdown と PDF で二重管理しないための仕組み。exe に添える 使い方.pdf は
+build.py がこのモジュールを呼んで生成する。
 
 組版は Pillow で A4 ページを画像として描画し、既存の pdf_builder.build_pdf
 （img2pdf）で 1 つの PDF に結合する。アプリ本体と同じ依存だけで完結する。
@@ -46,10 +47,6 @@ SIZE_TABLE = 14
 SIZE_FOOT = 11
 
 LINE_RATIO = 1.75  # 和文は行間を広めに取ると読みやすい
-
-# README のうち PDF に載せるセクション（## 見出し）。
-# セットアップ・手動テスト手順・開発者向けは開発者向けなので載せない。
-INCLUDE_SECTIONS = ('使い方', '重要な注意', 'うまくいかないとき')
 
 # 行頭・行末に置けない文字（簡易禁則処理）
 NO_LINE_START = '、。，．）」』】〕》〉！？ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮー・:;,.!?)]}〜'
@@ -101,14 +98,12 @@ def _fonts(size: int) -> dict[str, ImageFont.FreeTypeFont]:
 
 # --- Markdown パース ----------------------------------------------------------
 def _parse(md: str) -> list[dict]:
-    """README を描画用のブロック列に変換する。"""
+    """Markdown を描画用のブロック列に変換する。"""
     blocks: list[dict] = []
     para: list[str] = []
     in_code = False
     code: list[str] = []
     table: list[list[str]] = []
-    # 見出しで切り替わる採用フラグ。## より前（タイトルとリード文）は常に採用。
-    including = True
 
     def flush_para() -> None:
         if para:
@@ -127,8 +122,7 @@ def _parse(md: str) -> list[dict]:
         # コードブロックは中身をそのまま保持する（禁則も折り返しもしない）
         if stripped.startswith('```'):
             if in_code:
-                if including:
-                    blocks.append({'type': 'code', 'lines': code[:]})
+                blocks.append({'type': 'code', 'lines': code[:]})
                 code.clear()
             else:
                 flush_para()
@@ -144,12 +138,7 @@ def _parse(md: str) -> list[dict]:
         if m:
             flush_para()
             flush_table()
-            level = len(m.group(1))
-            title = m.group(2)
-            if level == 2:
-                including = title in INCLUDE_SECTIONS
-            if including:
-                blocks.append({'type': f'h{level}', 'text': title})
+            blocks.append({'type': f'h{len(m.group(1))}', 'text': m.group(2)})
             continue
 
         # 表（| a | b | 形式。|---|---| の区切り行は捨てる）
@@ -157,17 +146,13 @@ def _parse(md: str) -> list[dict]:
             cells = [c.strip() for c in stripped.strip('|').split('|')]
             if all(re.fullmatch(r':?-{2,}:?', c) for c in cells):
                 continue
-            if including:
-                flush_para()
-                table.append(cells)
+            flush_para()
+            table.append(cells)
             continue
         flush_table()
 
         if not stripped:
             flush_para()
-            continue
-
-        if not including:
             continue
 
         # 引用
@@ -195,7 +180,6 @@ def _parse(md: str) -> list[dict]:
 
     flush_para()
     flush_table()
-    # 採用しないセクションで開いた表が残ることがあるので、最後に採用分だけ返す
     return blocks
 
 
@@ -484,14 +468,14 @@ def _render_table(page: _Layout, rows: list[list[str]]) -> None:
 
 
 # --- 公開関数 -----------------------------------------------------------------
-def build_manual_pdf(readme_path: str, output_path: str) -> str:
-    """README.md から使い方 PDF を生成し、書き出したパスを返す。"""
-    with open(readme_path, encoding='utf-8') as f:
+def build_manual_pdf(source_path: str, output_path: str) -> str:
+    """MANUAL.md から使い方 PDF を生成し、書き出したパスを返す。"""
+    with open(source_path, encoding='utf-8') as f:
         md = f.read()
 
     blocks = _parse(md)
     if not blocks:
-        raise RuntimeError(f'{readme_path} から本文を抽出できませんでした')
+        raise RuntimeError(f'{source_path} から本文を抽出できませんでした')
 
     work_dir = tempfile.mkdtemp(prefix='manual_pdf_')
     try:
@@ -503,6 +487,6 @@ def build_manual_pdf(readme_path: str, output_path: str) -> str:
 
 if __name__ == '__main__':
     root = os.path.dirname(os.path.abspath(__file__))
-    out = build_manual_pdf(os.path.join(root, 'README.md'),
+    out = build_manual_pdf(os.path.join(root, 'MANUAL.md'),
                            os.path.join(root, 'dist', '使い方.pdf'))
     print(f'生成: {out}')

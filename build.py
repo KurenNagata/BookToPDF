@@ -4,9 +4,9 @@
 
 dist/ に次の 2 つを出力する:
     BookToPDF.exe … Python 不要の単体実行ファイル
-    使い方.pdf     … README.md から生成した利用者向けマニュアル
+    使い方.pdf     … MANUAL.md から生成した利用者向けマニュアル
 
-PDF は README.md を読んで作るので、使い方を書き換えたら build.py を流し直せば
+PDF は MANUAL.md を読んで作るので、使い方を書き換えたら build.py を流し直せば
 exe とマニュアルの内容が必ず揃う。
 """
 
@@ -19,10 +19,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 SPEC = ROOT / 'BookToPDF.spec'
-README = ROOT / 'README.md'
+MANUAL_SRC = ROOT / 'MANUAL.md'
 DIST = ROOT / 'dist'
 EXE = DIST / 'BookToPDF.exe'
-MANUAL = DIST / '使い方.pdf'
+MANUAL_PDF = DIST / '使い方.pdf'
 
 
 def _step(message: str) -> None:
@@ -58,7 +58,7 @@ def _build_manual() -> None:
     from manual_pdf import build_manual_pdf
 
     DIST.mkdir(exist_ok=True)
-    build_manual_pdf(str(README), str(MANUAL))
+    build_manual_pdf(str(MANUAL_SRC), str(MANUAL_PDF))
 
 
 def _mb(path: Path) -> str:
@@ -68,8 +68,8 @@ def _mb(path: Path) -> str:
 def main() -> None:
     if not SPEC.exists():
         raise SystemExit(f'{SPEC} がありません')
-    if not README.exists():
-        raise SystemExit(f'{README} がありません')
+    if not MANUAL_SRC.exists():
+        raise SystemExit(f'{MANUAL_SRC} がありません')
 
     _ensure_pyinstaller()
     _build_exe()
@@ -77,7 +77,7 @@ def main() -> None:
 
     _step('完成')
     print(f'{EXE}    ({_mb(EXE)})')
-    print(f'{MANUAL}  ({_mb(MANUAL)})')
+    print(f'{MANUAL_PDF}  ({_mb(MANUAL_PDF)})')
     print('\nこの 2 ファイルをまとめて配布すれば、'
           'Python の無い Windows でもそのまま使えます。')
 
