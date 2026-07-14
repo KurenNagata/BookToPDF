@@ -33,12 +33,12 @@ pip install -r requirements.txt
 python build.py
 ```
 
-`python build.py` だけで `dist\` に配布物 2 つが生成されます。PyInstaller が未インストールなら自動で入るので、事前準備は不要です。
+`python build.py` を実行すると**保存先を選ぶダイアログ**が開くので、配布物を置きたいフォルダを選びます（キャンセルすれば `dist\`）。PyInstaller が未インストールなら自動で入るので、事前準備は不要です。
 
 | 生成物 | 内容 |
 |---|---|
-| `dist\BookToPDF.exe` | Python 不要の単体実行ファイル（約 22 MB、コンソール非表示） |
-| `dist\使い方.pdf` | 利用者向けマニュアル（A4 / 2 ページ）。`MANUAL.md` から自動生成 |
+| `BookToPDF.exe` | Python 不要の単体実行ファイル（約 22 MB、コンソール非表示） |
+| `使い方.pdf` | 利用者向けマニュアル（A4 / 2 ページ）。`MANUAL.md` から自動生成 |
 
 **この 2 ファイルをセットで配布します。** exe を受け取った人は Python を入れる必要がなく、使い方は同梱の PDF を読めば分かる、という状態になります。
 
@@ -46,12 +46,15 @@ python build.py
 
 | やりたいこと | コマンド | 結果 |
 |---|---|---|
-| exe を作る | `python build.py` | `dist\` に exe と 使い方.pdf が生成される |
+| exe を作る（保存先を選ぶ） | `python build.py` | ダイアログで選んだフォルダに exe と 使い方.pdf が生成される |
+| exe を作る（保存先を直接指定） | `python build.py --out D:\配布` | ダイアログを出さず、指定フォルダに生成される。無ければ作られる |
+| exe を作る（従来どおり `dist\`） | `python build.py --no-ask` | ダイアログを出さず `dist\` に生成される |
 | アプリを動かす（開発中の確認用） | `python main.py` | GUI が起動する。**exe は作られません** |
 
 ### ビルドに関する補足
 
 - 使い方 PDF は `MANUAL.md` を組版したものです。使い方を書き換えたら `python build.py` を流し直せば、exe と PDF の内容が必ず揃います
+- 保存先は `BookToPDF.spec` には書いていません。PyInstaller に `--distpath` で渡しているだけなので、spec を書き換えなくても出力先を変えられます
 - 組版は Pillow で A4 ページを描画し、本アプリ自身の `pdf_builder.build_pdf`（img2pdf）で結合しています。新たな依存パッケージは増えません。日本語フォントは Windows 標準の游ゴシック / メイリオ / MS ゴシックを使うため、PDF 生成は Windows 上でのみ動きます
 - exe の初回起動には数秒かかります。単一ファイル形式のため、起動時に一時フォルダへ展開するからです。速くしたい場合は `BookToPDF.spec` の `EXE(...)` を `COLLECT` 形式（フォルダ配布）に変更してください
 - pynput でキー送信を行う都合上、セキュリティソフトが未署名の exe を警告することがあります。配布するならコード署名を検討してください
