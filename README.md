@@ -125,6 +125,28 @@ Desktop/
 python -m pytest tests -v
 ```
 
+### 配布物のビルド（.exe + 使い方 PDF）
+
+```powershell
+.venv\Scripts\activate
+python build.py
+```
+
+これだけで `dist\` に次の 2 つが生成されます。PyInstaller が未インストールなら自動で入ります。
+
+| 生成物 | 内容 |
+|---|---|
+| `dist\BookToPDF.exe` | Python 不要の単体実行ファイル（約 22 MB、コンソール非表示） |
+| `dist\使い方.pdf` | 利用者向けマニュアル（A4 / 2 ページ） |
+
+この 2 ファイルを渡すだけで、Python 環境のない Windows 10 / 11（64bit）でそのまま使えます。
+
+**使い方 PDF は、この README.md から生成されます。** 「使い方」「重要な注意」「うまくいかないとき」の各セクションを抜き出して A4 に組版したものです（セットアップや開発者向けの節は利用者には不要なので除外されます）。使い方を書き換えたら `python build.py` を流し直せば、exe とマニュアルの内容が必ず揃います。載せる範囲を変えたいときは `manual_pdf.py` の `INCLUDE_SECTIONS` を編集してください。
+
+- 初回起動は数秒かかります。単一ファイル形式は起動時に一時フォルダへ展開するためです。速度を優先する場合は `BookToPDF.spec` の `EXE(...)` を `COLLECT` 形式（フォルダ配布）に変更してください
+- pynput でキー送信を行う都合上、セキュリティソフトが未署名の exe を警告することがあります。配布するならコード署名を検討してください
+- PDF 生成は Windows 標準の日本語フォント（游ゴシック / メイリオ / MS ゴシック）を使います。新たな依存パッケージは増えません
+
 ### プロジェクト構成
 
 ```
@@ -132,6 +154,9 @@ python -m pytest tests -v
 ├── region_selector.py   # キャプチャ範囲選択オーバーレイ
 ├── capture_engine.py    # キャプチャループ本体
 ├── pdf_builder.py       # 画像 → PDF 結合
+├── build.py             # 配布物の一括ビルド（exe + 使い方 PDF）
+├── manual_pdf.py        # README.md → 使い方 PDF の組版
+├── BookToPDF.spec       # PyInstaller 設定
 ├── requirements.txt
 └── tests/
     └── test_core.py     # 純粋ロジックのユニットテスト
