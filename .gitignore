@@ -5,6 +5,9 @@ __pycache__/
 build/
 dist/
 
+# 配布物の置き場（build.py の出力先にリポジトリ内が選ばれた場合）
+BookToPDF_tools/
+
 # 仮想環境
 .venv/
 venv/

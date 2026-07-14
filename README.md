@@ -33,22 +33,24 @@ pip install -r requirements.txt
 python build.py
 ```
 
-`python build.py` を実行すると**保存先を選ぶダイアログ**が開くので、配布物を置きたいフォルダを選びます（キャンセルすれば `dist\`）。PyInstaller が未インストールなら自動で入るので、事前準備は不要です。
+`python build.py` を実行すると**置き場所を選ぶダイアログ**が開くので、配布物を置きたいフォルダを選びます（キャンセルすれば `dist\`）。選んだ場所の中に **`BookToPDF_tools\` フォルダ**が作られ、その中に配布物が生成されます。PyInstaller が未インストールなら自動で入るので、事前準備は不要です。
 
-| 生成物 | 内容 |
-|---|---|
-| `BookToPDF.exe` | Python 不要の単体実行ファイル（約 22 MB、コンソール非表示） |
-| `使い方.pdf` | 利用者向けマニュアル（A4 / 2 ページ）。`MANUAL.md` から自動生成 |
+```
+選んだ場所/
+└── BookToPDF_tools/
+    ├── BookToPDF.exe    ← Python 不要の単体実行ファイル（約 22 MB、コンソール非表示）
+    └── 使い方.pdf        ← 利用者向けマニュアル（A4 / 2 ページ）。MANUAL.md から自動生成
+```
 
-**この 2 ファイルをセットで配布します。** exe を受け取った人は Python を入れる必要がなく、使い方は同梱の PDF を読めば分かる、という状態になります。
+**この `BookToPDF_tools` フォルダごと配布します。** exe を受け取った人は Python を入れる必要がなく、使い方は同梱の PDF を読めば分かる、という状態になります。
 
 ### コマンドの使い分け
 
 | やりたいこと | コマンド | 結果 |
 |---|---|---|
-| exe を作る（保存先を選ぶ） | `python build.py` | ダイアログで選んだフォルダに exe と 使い方.pdf が生成される |
-| exe を作る（保存先を直接指定） | `python build.py --out D:\配布` | ダイアログを出さず、指定フォルダに生成される。無ければ作られる |
-| exe を作る（従来どおり `dist\`） | `python build.py --no-ask` | ダイアログを出さず `dist\` に生成される |
+| exe を作る（置き場所を選ぶ） | `python build.py` | ダイアログで選んだ場所に `BookToPDF_tools\` が作られる |
+| exe を作る（置き場所を直接指定） | `python build.py --out D:\配布` | ダイアログを出さず `D:\配布\BookToPDF_tools\` に作られる。フォルダが無ければ作られる |
+| exe を作る（従来どおり `dist\` の中） | `python build.py --no-ask` | ダイアログを出さず `dist\BookToPDF_tools\` に作られる |
 | アプリを動かす（開発中の確認用） | `python main.py` | GUI が起動する。**exe は作られません** |
 
 ### ビルドに関する補足

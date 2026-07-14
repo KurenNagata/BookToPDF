@@ -1,15 +1,15 @@
 """配布物を一括生成する。
 
-    python build.py                  保存先をダイアログで選ぶ（既定: dist）
+    python build.py                  置き場所をダイアログで選ぶ（既定: dist）
     python build.py --out D:\\配布    ダイアログを出さず指定フォルダへ
     python build.py --no-ask         ダイアログを出さず dist へ
 
-選んだフォルダに次の 2 つを出力する:
+選んだ場所の中に BookToPDF_tools フォルダを作り、その中に 2 つを出力する:
     BookToPDF.exe … Python 不要の単体実行ファイル
     使い方.pdf     … MANUAL.md から生成した利用者向けマニュアル
 
-PDF は MANUAL.md を読んで作るので、使い方を書き換えたら build.py を流し直せば
-exe とマニュアルの内容が必ず揃う。
+このフォルダごと渡せば配布できる。PDF は MANUAL.md を読んで作るので、使い方を
+書き換えたら build.py を流し直せば exe とマニュアルの内容が必ず揃う。
 """
 
 from __future__ import annotations
@@ -23,8 +23,12 @@ ROOT = Path(__file__).resolve().parent
 SPEC = ROOT / 'BookToPDF.spec'
 MANUAL_SRC = ROOT / 'MANUAL.md'
 
-DEFAULT_DIST = ROOT / 'dist'    # 保存先を選ばなかったときの既定
+DEFAULT_DIST = ROOT / 'dist'    # 置き場所を選ばなかったときの既定
 WORK_DIR = ROOT / 'build'       # PyInstaller の中間ファイル置き場（成果物ではない）
+
+# 選ばれた場所の中にこの名前でフォルダを作り、配布物をまとめる。
+# 選び先に exe と PDF を直接ばら撒くと、他のファイルに紛れて配りにくい。
+BUNDLE_DIR_NAME = 'BookToPDF_tools'
 
 EXE_NAME = 'BookToPDF.exe'
 MANUAL_NAME = '使い方.pdf'
@@ -34,12 +38,20 @@ def _step(message: str) -> None:
     print(f'\n=== {message} ===', flush=True)
 
 
-def _ask_output_dir(default: Path) -> Path:
-    """配布物の保存先をエクスプローラーで選んでもらう。
+def _ask_parent_dir(default: Path) -> Path:
+    """BookToPDF_tools フォルダを作る場所をエクスプローラーで選んでもらう。
 
     キャンセルしたら既定 (dist) のまま進める。ビルドは数分かかるので、
     先に聞いてから走らせる。
     """
+    # DPI 認識は tkinter を import / 初期化するより前に立てる。立てないと
+    # ダイアログが 100% で描かれてから OS に引き伸ばされ、文字がぼやける。
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_DPI_AWARE
+    except Exception:
+        pass   # 古い環境・Windows 以外では失敗してよい
+
     try:
         import tkinter as tk
         from tkinter import filedialog
@@ -50,7 +62,7 @@ def _ask_output_dir(default: Path) -> Path:
     root.withdraw()
     try:
         chosen = filedialog.askdirectory(
-            title='配布物 (BookToPDF.exe / 使い方.pdf) の保存先を選んでください',
+            title=f'{BUNDLE_DIR_NAME} フォルダを作る場所を選んでください',
             initialdir=str(default if default.is_dir() else ROOT),
         )
     finally:
@@ -73,7 +85,7 @@ def _ensure_pyinstaller() -> None:
 
 
 def _build_exe(out_dir: Path) -> Path:
-    _step('exe をビルドしています（数分かかります）')
+    _step('exe をビルドしています')
     # spec には出力先を書かない。--distpath で毎回渡すことで、spec を書き換えずに
     # 保存先を変えられる（--workpath は中間ファイルを常にリポジトリ内に留める）。
     subprocess.run([sys.executable, '-m', 'PyInstaller', str(SPEC),
@@ -105,18 +117,22 @@ def _mb(path: Path) -> str:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='配布物 (exe + 使い方 PDF) を作る')
     parser.add_argument('--out', metavar='フォルダ',
-                        help='配布物の保存先。省略すると選択ダイアログを出す')
+                        help=f'{BUNDLE_DIR_NAME} フォルダを作る場所。'
+                             '省略すると選択ダイアログを出す')
     parser.add_argument('--no-ask', action='store_true',
-                        help=f'ダイアログを出さず {DEFAULT_DIST.name} に出力する')
+                        help=f'ダイアログを出さず {DEFAULT_DIST.name} に作る')
     return parser.parse_args()
 
 
 def _resolve_output_dir(args: argparse.Namespace) -> Path:
+    """配布物を入れるフォルダ（選ばれた場所 / BookToPDF_tools）を決める。"""
     if args.out:
-        return Path(args.out).expanduser().resolve()
-    if args.no_ask:
-        return DEFAULT_DIST
-    return _ask_output_dir(DEFAULT_DIST).resolve()
+        parent = Path(args.out).expanduser().resolve()
+    elif args.no_ask:
+        parent = DEFAULT_DIST
+    else:
+        parent = _ask_parent_dir(DEFAULT_DIST).resolve()
+    return parent / BUNDLE_DIR_NAME
 
 
 def main() -> None:
@@ -141,8 +157,6 @@ def main() -> None:
     _step('完成')
     print(f'{exe}    ({_mb(exe)})')
     print(f'{manual_pdf}  ({_mb(manual_pdf)})')
-    print('\nこの 2 ファイルをまとめて配布すれば、'
-          'Python の無い Windows でもそのまま使えます。')
 
 
 if __name__ == '__main__':
