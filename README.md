@@ -89,6 +89,7 @@ python -m pytest tests -v
 ├── region_selector.py   # キャプチャ範囲選択オーバーレイ
 ├── capture_engine.py    # キャプチャループ本体
 ├── pdf_builder.py       # 画像 → PDF 結合
+├── paths.py             # 既定の保存先 / フォルダ名の正規化
 ├── build.py             # 配布物の一括ビルド（exe + 使い方 PDF）
 ├── manual_pdf.py        # MANUAL.md → 使い方 PDF の組版
 ├── BookToPDF.spec       # PyInstaller 設定

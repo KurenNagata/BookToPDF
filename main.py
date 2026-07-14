@@ -20,6 +20,8 @@ from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 from capture_engine import (DIRECTION_KEYS, OUTPUT_MODES, CaptureEngine,
                             primary_monitor_region)
+from paths import (INVALID_NAME_CHARS, default_output_dir,
+                   sanitize_folder_name)
 from pdf_builder import QUALITY_CHOICES, QUALITY_HIGH
 from region_selector import RegionSelector
 
@@ -50,10 +52,10 @@ DEFAULT_PAGE_DELAY = 300   # 最短待機。以降はページが変わるまで
 DEFAULT_MAX_PAGES = 500
 DEFAULT_DUP_THRESHOLD = 3
 DEFAULT_START_DELAY = 4
-DEFAULT_OUTPUT_DIR = os.path.join(os.path.expanduser('~'), 'Desktop')
+DEFAULT_OUTPUT_DIR = default_output_dir()
 DEFAULT_OUTPUT_MODE = 'PDF + 画像 (PNG)'
 
-BASE_W, BASE_H = 470, 600   # 100% 表示スケール時のウィンドウサイズ（仕様）
+BASE_W, BASE_H = 470, 672   # 100% 表示スケール時のウィンドウサイズ
 
 
 class Tooltip:
@@ -377,7 +379,7 @@ class App:
         head = ttk.Frame(out)
         head.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(0, px(2)))
         ttk.Label(head, text='保存先フォルダ', style='Field.TLabel').pack(side='left')
-        ttk.Label(head, text='この中に capture_日時 フォルダを作ります',
+        ttk.Label(head, text='この中にフォルダを作って保存します',
                   style='Unit.TLabel').pack(side='right')
 
         path_row = ttk.Frame(out)
@@ -391,6 +393,16 @@ class App:
         self.browse_btn = ttk.Button(path_row, text='参照', style='Ghost.TButton',
                                      width=5, command=self.on_browse)
         self.browse_btn.grid(row=0, column=1, padx=(px(8), 0))
+
+        tk.Frame(out, bg=PAPER, height=px(8)).grid(row=3, column=0)
+
+        self.folder_name = tk.StringVar(value='')
+        self._field(out, 4, 0, 'フォルダ名', colspan=2, widget='entry',
+                    var=self.folder_name, unit='空欄なら capture_日時',
+                    tip='保存先フォルダの中に作るフォルダの名前です。本のタイトルなどを'
+                        '入れておくと、あとで探しやすくなります。空欄のままなら '
+                        'capture_日時 になります。同じ名前のフォルダが既にあるときは'
+                        '末尾に _2, _3 … を付けるので、上書きされることはありません。')
 
         # --- アクション（下端に固定） ----------------------------------------
         actions = ttk.Frame(outer)
@@ -439,6 +451,9 @@ class App:
         if widget == 'combo':
             w = ttk.Combobox(cell, textvariable=var, values=values, width=10,
                              state='readonly', font=self.fonts['ui'])
+        elif widget == 'entry':
+            w = ttk.Entry(cell, textvariable=var, width=12,
+                          font=self.fonts['mono_sm'])
         else:
             w = ttk.Spinbox(cell, textvariable=var, from_=from_, to=to, width=6,
                             increment=increment, font=self.fonts['mono'],
@@ -508,6 +523,7 @@ class App:
                 'quality': self.quality.get(),
                 'output_mode': self.output_mode.get(),
                 'output_base': self.output_dir.get().strip(),
+                'output_name': self.folder_name.get().strip(),
             }
         except (ValueError, TypeError):
             messagebox.showerror(APP_TITLE, '数値の項目を確認してください')
@@ -521,8 +537,24 @@ class App:
             messagebox.showerror(APP_TITLE,
                                  f'保存先フォルダが見つかりません:\n{base}')
             return None
-        # 保存は base の中に毎回新しい capture_日時 フォルダを作って行うため、
-        # 既存ファイルの上書きは起こらない（上書き確認は不要）
+
+        # フォルダ名は空欄なら capture_日時。入力があるときだけ、作れる名前か見る。
+        # （エンジン側でも正規化するが、撮り終えてから弾かれると撮り直しになる）
+        name = config['output_name']
+        if name:
+            invalid = sorted(set(name) & set(INVALID_NAME_CHARS))
+            if invalid:
+                messagebox.showerror(
+                    APP_TITLE,
+                    'フォルダ名に使えない文字が含まれています:\n'
+                    + '  '.join(invalid))
+                return None
+            if not sanitize_folder_name(name):
+                messagebox.showerror(APP_TITLE, 'フォルダ名を確認してください')
+                return None
+
+        # 保存は base の中に毎回新しいフォルダを作って行い、同名があれば _2, _3 …
+        # と足すため、既存ファイルの上書きは起こらない（上書き確認は不要）
         return config
 
     def on_start(self) -> None:
@@ -558,17 +590,36 @@ class App:
             kind = 'muted'
         self._set_status(text, kind)
 
-    def _on_done(self, out_dir: str | None) -> None:
+    def _on_done(self, _out_dir: str | None) -> None:
         self._set_running(False)
-        if out_dir:
-            if messagebox.askyesno(
-                    APP_TITLE,
-                    f'保存しました\n\n{out_dir}\n\nフォルダを開きますか？'):
-                try:
-                    os.startfile(out_dir)
-                except OSError:
-                    pass
+        # キャプチャ中は取り込み先のビューアーが前面にある。こちらを前に出さないと、
+        # 撮影が止まったあと何も起きていないように見える（完了表示がビューアーの
+        # 後ろに隠れる）。前面に戻して「完成: 保存先」のステータスを見せる。
+        # 何冊も続けて取り込めるよう、確認ダイアログもエクスプローラーも出さない。
+        self._raise_window()
         self.engine = None
+
+    def _raise_window(self) -> None:
+        """自ウィンドウを前面に戻す。
+
+        Windows は非アクティブなプロセスが前面を奪うのを拒むため、lift() だけでは
+        ビューアーの後ろに隠れたままになることがある。topmost を一瞬だけ立てて
+        すぐ下ろすと、最前面に居座らせずに前面へ出せる。
+        """
+        self.root.deiconify()
+        self.root.lift()
+        self.root.attributes('-topmost', True)
+        self.root.after(200, self._clear_topmost)
+        try:
+            self.root.focus_force()
+        except tk.TclError:
+            pass
+
+    def _clear_topmost(self) -> None:
+        try:
+            self.root.attributes('-topmost', False)
+        except tk.TclError:
+            pass   # 既に閉じられている
 
     def _set_running(self, running: bool) -> None:
         self.running = running

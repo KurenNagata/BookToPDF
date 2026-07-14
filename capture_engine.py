@@ -18,6 +18,7 @@ import mss
 from PIL import Image
 from pynput.keyboard import Controller, Key, Listener
 
+from paths import sanitize_folder_name, timestamp_folder_name
 from pdf_builder import build_pdf
 
 DIRECTION_KEYS: dict[str, Key | None] = {
@@ -158,7 +159,15 @@ class CaptureEngine:
             while time.monotonic() < deadline:
                 image, sig = self._grab(sct, region)
                 if self._page_changed(sig, last_sig):
-                    return self._wait_render_settled(sct, region, image, sig)
+                    image, sig = self._wait_render_settled(sct, region, image, sig)
+                    if image is None:
+                        return None, None       # 中断
+                    if self._page_changed(sig, last_sig):
+                        return image, sig
+                    # 落ち着いた先が直前ページと同じ = ページは進んでいない。
+                    # 末尾でめくろうとしたときのバウンス・フェード・点滅がこれで、
+                    # 撮ってしまうと同じページを最大ページ数まで撮り続けてしまう。
+                    # 変化なし扱いにして待機を続け、末尾判定に落とす。
                 if self._stop.wait(POLL_INTERVAL):
                     return None, None
 
@@ -198,21 +207,23 @@ class CaptureEngine:
             if self._stop.wait(1.0):
                 return
 
-    def _make_output_dir(self, base: str) -> str:
-        """保存先フォルダ（base/capture_日時）を作って返す。
+    def _make_output_dir(self, base: str, name: str | None = None) -> str:
+        """保存先フォルダ（base/フォルダ名）を作って返す。
 
+        フォルダ名は指定があればそれ、無ければ capture_日時。同名が既にあれば
+        _2, _3 … を足すので、過去の結果を上書きすることはない。
         exist_ok=False + FileExistsError で作成し、確認してから作る方式は取らない
         （確認と作成の間に他プロセスが作る可能性があるため）。
         """
-        name = time.strftime('capture_%Y%m%d_%H%M%S')
+        folder = sanitize_folder_name(name) or timestamp_folder_name()
         for suffix in range(1, 100):
             candidate = os.path.join(
-                base, name if suffix == 1 else f'{name}_{suffix}')
+                base, folder if suffix == 1 else f'{folder}_{suffix}')
             try:
                 os.makedirs(candidate)
                 return candidate
             except FileExistsError:
-                continue   # 同じ秒に複数回開始した場合
+                continue   # 同名フォルダがある / 同じ秒に複数回開始した場合
         raise OSError(f'保存先フォルダを作成できません: {base}')
 
     # -------------------------------------------------------------------- main
@@ -287,8 +298,9 @@ class CaptureEngine:
                 self.on_done(None)
                 return
 
-            # ---- 保存: base/capture_日時/ に PDF・PNG をまとめる ----
-            out_dir = self._make_output_dir(cfg['output_base'])
+            # ---- 保存: base/フォルダ名/ に PDF・PNG をまとめる ----
+            out_dir = self._make_output_dir(cfg['output_base'],
+                                            cfg.get('output_name'))
             png_saved = False
 
             if 'png' in outputs:

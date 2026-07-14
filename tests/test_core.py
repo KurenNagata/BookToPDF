@@ -14,13 +14,20 @@ from PIL import Image, ImageDraw, ImageFilter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import capture_engine  # noqa: E402
 from capture_engine import (  # noqa: E402
     CHANGE_RATIO,
     DIRECTION_KEYS,
     OUTPUT_MODES,
+    CaptureEngine,
     changed_fraction,
     fingerprint,
     signature_diff,
+)
+from paths import (  # noqa: E402
+    MAX_NAME_LENGTH,
+    default_output_dir,
+    sanitize_folder_name,
 )
 from pdf_builder import (  # noqa: E402
     QUALITY_HIGH,
@@ -197,3 +204,171 @@ def test_manual_direction_maps_to_none():
 def test_arrow_directions_are_keys():
     for label in ('右 (→)', '左 (←)', '下 (↓)'):
         assert DIRECTION_KEYS[label] is not None
+
+
+# ------------------------------------------------------ sanitize_folder_name
+def test_folder_name_keeps_normal_name():
+    assert sanitize_folder_name('数学の教科書 第1章') == '数学の教科書 第1章'
+
+
+def test_folder_name_replaces_invalid_characters():
+    assert sanitize_folder_name('a/b:c*d?') == 'a_b_c_d_'
+
+
+def test_folder_name_drops_trailing_dot_and_space():
+    """Windows は末尾の '.' と空白を黙って落とす。先に落として名前をずらさない。"""
+    assert sanitize_folder_name('  第1章. ') == '第1章'
+
+
+def test_folder_name_escapes_reserved_device_name():
+    assert sanitize_folder_name('NUL') == '_NUL'
+    assert sanitize_folder_name('con.txt') == '_con.txt'
+
+
+def test_folder_name_is_truncated():
+    assert len(sanitize_folder_name('あ' * 300)) == MAX_NAME_LENGTH
+
+
+@pytest.mark.parametrize('name', ['', None, '   ', '...', '  ..  '])
+def test_folder_name_falls_back_to_empty(name):
+    """既定名 (capture_日時) に落とすため、成立しない名前は '' を返す。"""
+    assert sanitize_folder_name(name) == ''
+
+
+# ----------------------------------------------------------- default_output_dir
+def test_default_output_dir_exists():
+    path = default_output_dir()
+    assert os.path.isdir(path)
+
+
+# ------------------------------------------------------------ _make_output_dir
+def _engine(**config) -> CaptureEngine:
+    return CaptureEngine(config, on_status=lambda _t: None, on_done=lambda _p: None)
+
+
+def test_make_output_dir_uses_given_name(tmp_path):
+    out = _engine()._make_output_dir(str(tmp_path), '第1章')
+
+    assert os.path.basename(out) == '第1章'
+    assert os.path.isdir(out)
+
+
+def test_make_output_dir_defaults_to_timestamp(tmp_path):
+    out = _engine()._make_output_dir(str(tmp_path), '')
+
+    assert os.path.basename(out).startswith('capture_')
+    assert os.path.isdir(out)
+
+
+def test_make_output_dir_never_overwrites(tmp_path):
+    """同じ名前で 2 回撮っても、前回の結果を上書きしないこと。"""
+    first = _engine()._make_output_dir(str(tmp_path), '第1章')
+    second = _engine()._make_output_dir(str(tmp_path), '第1章')
+
+    assert first != second
+    assert os.path.basename(second) == '第1章_2'
+    assert os.path.isdir(first) and os.path.isdir(second)
+
+
+def test_make_output_dir_sanitizes_name(tmp_path):
+    out = _engine()._make_output_dir(str(tmp_path), 'a/b')
+
+    assert os.path.dirname(out) == str(tmp_path)   # サブフォルダを掘らせない
+    assert os.path.basename(out) == 'a_b'
+
+
+# ------------------------------------------------- 末尾判定 (_await_page_change)
+class _FakeRaw:
+    def __init__(self, image: Image.Image):
+        self.size = image.size
+        self.bgra = image.convert('RGBA').tobytes('raw', 'BGRA')
+
+
+class _FakeSct:
+    """grab() のたびに frames を 1 枚ずつ返す。尽きたら最後の 1 枚を返し続ける。"""
+
+    def __init__(self, frames):
+        self.frames = list(frames)
+        self.grabs = 0
+
+    def grab(self, _region):
+        image = self.frames[min(self.grabs, len(self.frames) - 1)]
+        self.grabs += 1
+        return _FakeRaw(image)
+
+
+class _FakeKeyboard:
+    def __init__(self):
+        self.sends = 0
+
+    def press(self, _key):
+        self.sends += 1
+
+    def release(self, _key):
+        pass
+
+
+_REGION = {'left': 0, 'top': 0, 'width': 200, 'height': 150}
+
+
+def _viewer_page(n: int, turning: bool = False) -> Image.Image:
+    """ページ n の表示。turning=True はめくり途中（アニメーション）のフレーム。"""
+    im = Image.new('RGB', (200, 150), (255, 255, 255))
+    d = ImageDraw.Draw(im)
+    d.rectangle([20, 20, 180, 60 + (n % 4) * 15], fill=(30, 30, 30))
+    if turning:
+        d.rectangle([0, 0, 200, 20], fill=(120, 120, 120))
+    return im
+
+
+@pytest.fixture
+def fast_engine(monkeypatch):
+    """待ち時間を詰めた CaptureEngine（末尾判定を実時間で待たない）。"""
+    for name, value in (('CHANGE_TIMEOUT', 0.15), ('STABLE_TIMEOUT', 0.15),
+                        ('POLL_INTERVAL', 0.01), ('KEY_HOLD', 0.0)):
+        monkeypatch.setattr(capture_engine, name, value)
+    return _engine(dup_threshold=3)
+
+
+def _await(engine, frames):
+    keyboard = _FakeKeyboard()
+    last_sig = fingerprint(frames[0])
+    image, sig = engine._await_page_change(
+        _FakeSct(frames), _REGION, keyboard, capture_engine.Key.right,
+        last_sig, min_wait=0.0)
+    return image, sig, keyboard
+
+
+def test_page_turn_is_captured(fast_engine):
+    """めくれたら、アニメーションではなく落ち着いた後のページを返すこと。"""
+    frames = [_viewer_page(1), _viewer_page(2, turning=True), _viewer_page(2)]
+
+    image, sig, _ = _await(fast_engine, frames)
+
+    assert image is not None
+    assert changed_fraction(sig, fingerprint(_viewer_page(2))) == 0.0
+
+
+def test_bounce_at_end_of_book_is_not_a_new_page(fast_engine):
+    """末尾でめくろうとして画面が一瞬揺れ、同じページに戻る場合。
+
+    揺れを「ページが変わった」と受け取って撮ってしまうと、同じページを最大
+    ページ数まで撮り続けて止まらなくなる。落ち着いた先が直前ページと同じなら
+    ページは進んでいないと見なし、末尾と判定すること。
+    """
+    # 揺れ (turning) は一瞬で、すぐ元のページに戻って静止する
+    frames = [_viewer_page(7), _viewer_page(7, turning=True),
+              _viewer_page(7), _viewer_page(7)] * 200
+
+    image, _, keyboard = _await(fast_engine, frames)
+
+    assert image is None                              # 末尾と判定した
+    assert keyboard.sends == capture_engine.MAX_KEY_RESENDS   # 送り直しはした
+
+
+def test_static_end_of_book_stops(fast_engine):
+    """末尾で画面がまったく変わらない場合も、送り直したうえで停止すること。"""
+    image, _, keyboard = _await(fast_engine, [_viewer_page(9)])
+
+    assert image is None
+    assert keyboard.sends == capture_engine.MAX_KEY_RESENDS
