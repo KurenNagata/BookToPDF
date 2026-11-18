@@ -18,7 +18,7 @@ import mss
 from PIL import Image
 from pynput.keyboard import Controller, Key, Listener
 
-from paths import sanitize_folder_name, timestamp_folder_name
+from paths import is_library_dir, sanitize_folder_name, timestamp_folder_name
 from pdf_builder import build_pdf
 
 DIRECTION_KEYS: dict[str, Key | None] = {
@@ -36,6 +36,10 @@ OUTPUT_MODES: dict[str, tuple[str, ...]] = {
 }
 
 PDF_FILENAME = 'capture.pdf'
+
+# 本棚フォルダの中で、書きかけの PDF を置く隠しフォルダ。OwlBunko は本棚フォルダの直下の
+# PDF だけを見るので、ここに置いたものは読まれない（書き終えてから、直下へ名前を変える）
+LIBRARY_TMP_DIR = '.booktopdf-tmp'
 
 SIG_SIZE = (32, 32)
 
@@ -226,6 +230,101 @@ class CaptureEngine:
                 continue   # 同名フォルダがある / 同じ秒に複数回開始した場合
         raise OSError(f'保存先フォルダを作成できません: {base}')
 
+    # ------------------------------------------- OwlBunko の本棚フォルダへの保存
+    def _reserve_library_names(self, base: str, name: str | None,
+                               outputs: tuple[str, ...]) -> tuple[str, str]:
+        """本棚フォルダ直下に置く名前を決めて、場所を確保する。(PDFの名前の幹, 画像のフォルダ)。
+
+        PDF は base/幹.pdf、画像は base/幹_images/。どちらも、既にあれば _2, _3 … を足し、
+        上書きしない。PDF は、書き終えるまで OwlBunko が読まないよう、隠しフォルダ
+        （LIBRARY_TMP_DIR）の中に、同じ名前で場所を取る（作るときは排他: 同時に同じ名前を
+        取らない）。
+        """
+        stem0 = sanitize_folder_name(name) or timestamp_folder_name()
+        tmp_dir = os.path.join(base, LIBRARY_TMP_DIR)
+        for suffix in range(1, 100):
+            stem = stem0 if suffix == 1 else f'{stem0}_{suffix}'
+            final = os.path.join(base, stem + '.pdf')
+            images = os.path.join(base, stem + '_images')
+            part = os.path.join(tmp_dir, stem + '.pdf')
+            if os.path.exists(final) or os.path.exists(images) or os.path.exists(part):
+                continue
+            made_part = made_images = False
+            try:
+                if 'pdf' in outputs:
+                    os.makedirs(tmp_dir, exist_ok=True)
+                    open(part, 'xb').close()
+                    made_part = True
+                if 'png' in outputs:
+                    os.makedirs(images)
+                    made_images = True
+                return stem, images
+            except FileExistsError:
+                if made_part:
+                    os.remove(part)
+                if made_images:
+                    os.rmdir(images)
+        raise OSError(f'保存先に置く名前を決められません: {base}')
+
+    def _finish_library_pdf(self, base: str, stem: str) -> str:
+        """書き終えた PDF を、隠しフォルダから本棚フォルダの直下へ移す（名前を変える）。
+
+        同じ名前が先にできていたら、上書きせず番号を足す。
+        """
+        part = os.path.join(base, LIBRARY_TMP_DIR, stem + '.pdf')
+        for suffix in range(1, 100):
+            final = os.path.join(
+                base, (stem if suffix == 1 else f'{stem}_{suffix}') + '.pdf')
+            try:
+                os.rename(part, final)   # Windows では、あれば FileExistsError（上書きしない）
+                break
+            except FileExistsError:
+                continue
+        else:
+            raise OSError(f'PDFの名前を決められません: {base}')
+        try:
+            os.rmdir(os.path.dirname(part))   # 空になったら、隠しフォルダも消す
+        except OSError:
+            pass   # ほかの実行が使っているときは、そのまま
+        return final
+
+    def _save_to_library(self, saved: list[str], outputs: tuple[str, ...],
+                         cfg: dict) -> tuple[str, str | None]:
+        """OwlBunko の本棚フォルダの直下に保存する。(開く場所, 失敗の知らせ または None)。
+
+        PDF は「フォルダ名.pdf」（題名がフォルダ名になる）、PNG は「フォルダ名_images」。
+        本棚は直下のPDFだけを見るので、PNG のフォルダは影響しない。
+        """
+        base = cfg['output_base']
+        stem, images = self._reserve_library_names(base, cfg.get('output_name'),
+                                                   outputs)
+        png_saved = 'png' in outputs
+        if png_saved:
+            self.on_status(f'{len(saved)} 枚のページ画像を保存中…')
+            for path in saved:
+                shutil.copy2(path, images)
+        if 'pdf' not in outputs:
+            return images, None
+
+        self.on_status(f'{len(saved)} ページを PDF に変換中…')
+        part = os.path.join(base, LIBRARY_TMP_DIR, stem + '.pdf')
+        try:
+            build_pdf(saved, part, cfg['quality'])
+            return self._finish_library_pdf(base, stem), None
+        except Exception as exc:  # noqa: BLE001 - アプリは落とさない
+            if os.path.exists(part):
+                os.remove(part)   # 書きかけのファイルは残さない
+            try:
+                os.rmdir(os.path.dirname(part))
+            except OSError:
+                pass
+            if not png_saved:
+                os.makedirs(images, exist_ok=True)
+                for path in saved:
+                    shutil.copy2(path, images)
+            return images, (f'PDF作成に失敗: {exc}\n'
+                            f'ページ画像を保存しました: {images}')
+
     # -------------------------------------------------------------------- main
     def run(self) -> None:
         cfg = self.config
@@ -296,6 +395,16 @@ class CaptureEngine:
             if not saved:
                 self.on_status('取得ページがありません')
                 self.on_done(None)
+                return
+
+            if is_library_dir(cfg['output_base']):
+                # OwlBunko の本棚フォルダ: PDF を「フォルダ名.pdf」として直下に置く
+                path, failure = self._save_to_library(saved, outputs, cfg)
+                if failure:
+                    self.on_status(failure)
+                else:
+                    self.on_status(f'完成: {path}')
+                self.on_done(path)
                 return
 
             # ---- 保存: base/フォルダ名/ に PDF・PNG をまとめる ----

@@ -6,8 +6,10 @@ GUI（main.py）と CaptureEngine の両方から使うので、tkinter にも m
 
 from __future__ import annotations
 
+import json
 import os
 import time
+from collections.abc import Mapping
 
 # Windows がフォルダ名に使えない文字
 INVALID_NAME_CHARS = '<>:"/\\|?*'
@@ -75,8 +77,49 @@ def _downloads_from_registry() -> str | None:
     return os.path.normpath(os.path.expandvars(path)) if path else None
 
 
+def owlbunko_library_dir(env: Mapping[str, str] | None = None,
+                         home: str | None = None) -> str | None:
+    """OwlBunko（本棚アプリ）の本棚フォルダ。使っていない・見つからなければ None。
+
+    順に調べる: OwlBunko の設定（%APPDATA%\\OwlBunko\\settings.json の library_dir）
+    → ~/OwlBunko（フォルダがあるとき）。どちらも、フォルダが実際にあるときだけ返す。
+    フォルダは作らない（OwlBunko を使っていない人の動きを変えないため）。
+    """
+    env = os.environ if env is None else env
+    home = os.path.expanduser('~') if home is None else home
+
+    appdata = env.get('APPDATA')
+    settings = os.path.join(appdata, 'OwlBunko', 'settings.json') if appdata else None
+    if settings:
+        try:
+            with open(settings, encoding='utf-8') as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = None
+        configured = data.get('library_dir') if isinstance(data, dict) else None
+        if isinstance(configured, str) and configured.strip():
+            path = os.path.normpath(configured.strip())
+            if os.path.isdir(path):
+                return path
+
+    fallback = os.path.join(home, 'OwlBunko')
+    return os.path.normpath(fallback) if os.path.isdir(fallback) else None
+
+
+def is_library_dir(path: str, library: str | None = None) -> bool:
+    """path が OwlBunko の本棚フォルダか（大文字小文字・表記の違いは同じとみなす）。"""
+    library = owlbunko_library_dir() if library is None else library
+    if not path or not library:
+        return False
+    return os.path.normcase(os.path.abspath(path)) == os.path.normcase(
+        os.path.abspath(library))
+
+
 def default_output_dir() -> str:
-    """既定の保存先。ダウンロードフォルダ、無ければホーム。"""
+    """既定の保存先。OwlBunko の本棚フォルダ、無ければダウンロードフォルダ、無ければホーム。"""
+    library = owlbunko_library_dir()
+    if library:
+        return library
     home = os.path.expanduser('~')
     for candidate in (_downloads_from_registry(),
                       os.path.join(home, 'Downloads')):
